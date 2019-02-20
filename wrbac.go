@@ -1,6 +1,7 @@
 package wrbac
 
 import (
+	"errors"
 	"sync"
 
 	"github.com/webasis/wrpc"
@@ -31,11 +32,11 @@ func (r *Role) AuthSync(token string, m wsync.AuthMethod, topic string) bool {
 	return r.Sync(token, m, topic)
 }
 
-type RoleSet map[*Role]bool
+type RoleSet map[Auther]bool
 
 func (rs RoleSet) AuthRPC(req wrpc.Req) bool {
 	for role := range rs {
-		if role.RPC(req) {
+		if role.AuthRPC(req) {
 			return true
 		}
 	}
@@ -44,30 +45,112 @@ func (rs RoleSet) AuthRPC(req wrpc.Req) bool {
 
 func (rs RoleSet) AuthSync(token string, m wsync.AuthMethod, topic string) bool {
 	for role := range rs {
-		if role.Sync(token, m, topic) {
+		if role.AuthSync(token, m, topic) {
 			return true
 		}
 	}
 	return false
 }
 
+type User struct {
+	Secrets map[string]RoleSet // map[secret]
+}
+
+func NewUser() *User {
+	u := &User{
+		Secrets: make(map[string]RoleSet),
+	}
+	return u
+}
+
+func (u *User) Add(secret string, authers ...Auther) *User {
+	rs := make(RoleSet)
+	for _, a := range authers {
+		rs[a] = true
+	}
+	u.Secrets[secret] = rs
+	return u
+}
+
 type Table struct {
 	sync.RWMutex
-	Users map[string]RoleSet // map[token]
+	Users map[string]*User  // map[name]
+	Roles map[string]Auther // name
+}
+
+func New() *Table {
+	return &Table{
+		Users: make(map[string]*User),
+		Roles: make(map[string]Auther),
+	}
 }
 
 func (t *Table) AuthRPC(req wrpc.Req) bool {
 	t.RLock()
 	defer t.RUnlock()
 
-	return t.Users[req.Token].AuthRPC(req)
+	name, secret := FromToken(req.Token)
+
+	u := t.Users[name]
+	if u == nil {
+		return false
+	}
+
+	return u.Secrets[secret].AuthRPC(req)
 }
 
 func (t *Table) AuthSync(token string, m wsync.AuthMethod, topic string) bool {
 	t.RLock()
 	defer t.RUnlock()
 
-	return t.Users[token].AuthSync(token, m, topic)
+	name, secret := FromToken(token)
+
+	u := t.Users[name]
+	if u == nil {
+		return false
+	}
+
+	return u.Secrets[secret].AuthSync(token, m, topic)
+}
+
+func (t *Table) Register(name string, a Auther) {
+	t.Update(func() error {
+		t.Roles[name] = a
+		return nil
+	})
+}
+
+func (t *Table) Check(roles ...string) bool {
+	err := t.View(func() error {
+		for _, role := range roles {
+			_, ok := t.Roles[role]
+			if !ok {
+				return errors.New("not found role")
+			}
+		}
+		return nil
+	})
+	return err == nil
+}
+
+func (t *Table) Load(name, secret string, roles ...string) {
+	t.Update(func() error {
+		u := t.Users[name]
+		if u == nil {
+			u = NewUser()
+		}
+
+		authers := make([]Auther, 0, len(roles))
+		for _, role := range roles {
+			a := t.Roles[role]
+			if a != nil {
+				authers = append(authers, a)
+			}
+		}
+		u.Add(secret, authers...)
+		t.Users[name] = u
+		return nil
+	})
 }
 
 func (t *Table) Update(fn func() error) error {
