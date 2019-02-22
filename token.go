@@ -17,7 +17,7 @@ func FromToken(token string) (name, secret string) {
 		return "", ""
 	}
 
-	data := strings.Split(string(raw), token_sep)
+	data := strings.SplitN(string(raw), token_sep, 2)
 	if len(data) > 0 {
 		name = data[0]
 	}
