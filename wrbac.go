@@ -54,12 +54,13 @@ func (rs RoleSet) AuthSync(token string, m wsync.AuthMethod, topic string) bool 
 
 type User struct {
 	Secrets map[string]RoleSet // map[secret]
-	Mask    Auther
+	Masks   map[string]Auther  // map[secret]
 }
 
 func NewUser() *User {
 	u := &User{
 		Secrets: make(map[string]RoleSet),
+		Masks:   make(map[string]Auther),
 	}
 	return u
 }
@@ -97,8 +98,9 @@ func (t *Table) AuthRPC(req wrpc.Req) bool {
 		return false
 	}
 
-	if u.Mask != nil {
-		if u.Mask.AuthRPC(req) == false {
+	mask := u.Masks[secret]
+	if mask != nil {
+		if mask.AuthRPC(req) == false {
 			return false
 		}
 	}
@@ -117,8 +119,9 @@ func (t *Table) AuthSync(token string, m wsync.AuthMethod, topic string) bool {
 		return false
 	}
 
-	if u.Mask != nil {
-		if u.Mask.AuthSync(token, m, topic) == false {
+	mask := u.Masks[secret]
+	if mask != nil {
+		if mask.AuthSync(token, m, topic) == false {
 			return false
 		}
 	}
@@ -153,7 +156,7 @@ func (t *Table) Load(name, secret string, mask string, roles ...string) {
 			u = NewUser()
 		}
 
-		u.Mask = t.Roles[mask]
+		u.Masks[secret] = t.Roles[mask]
 
 		authers := make([]Auther, 0, len(roles))
 		for _, role := range roles {
